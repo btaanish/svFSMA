@@ -1282,7 +1282,7 @@ S0: Wait for Request
   Actions: (none)
   Outputs: _e_req_ack = 0, _e_resp_valid = 0
   Transitions:
-    -> S1 [when _e_req_valid = 1, same cycle; _e_req_ack pulses]
+    -> S1 [when _e_req_valid = 1; _e_req_ack pulses this cycle; S1 entered 1 cycle later via counter_8]
     -> S_skip [when _e_req_valid = 0, same cycle]
 
 S_skip: No-Request Idle
