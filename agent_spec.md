@@ -642,6 +642,35 @@ Cycle N+2: EVENTS0[6]=1 -> EVENTS0[0]=1 -> _e_req_valid=1 (new request).
 
 If a counter name contains `_Y` where Y > 1 (e.g., `_event_counter_3_2`), it represents a Y-cycle delay. Look for cascaded counter registers — each stage adds one cycle of latency.
 
+### Pattern B Variant: Multi-Cycle Counter with Comparison
+
+Some counters use multi-bit width (e.g., `logic[1:0]`) and a comparison operator instead of a simple 1-bit register. The event fires when the counter reaches a target value:
+
+```systemverilog
+assign EVENTS0[X].event_current = _thread_0_event_counter_X_q == 2'd2;
+assign _thread_0_event_counter_X_n = EVENTS0[P].event_current ? 2'd1
+                                   : EVENTS0[X].event_current ? '0
+                                   : _thread_0_event_counter_X_q ? (_thread_0_event_counter_X_q + 2'd1)
+                                   : _thread_0_event_counter_X_q;
+```
+
+- **Meaning:** Event X fires when the counter equals the target value (e.g., `2'd2`). The counter uses a chained ternary for its next-state logic:
+  1. If the predecessor event P fires → load initial value (e.g., `2'd1`) to start counting
+  2. If event X fires (counter reached target) → clear to 0 (stop counting)
+  3. If counter is nonzero → increment (continue counting)
+  4. Otherwise → hold at 0 (idle)
+- **FSM interpretation:** This is a **multi-cycle delay**. The FSM waits N cycles between the predecessor event and event X. The delay is `target - initial + 1` clock cycles (e.g., `2'd2 - 2'd1 + 1 = 2` cycles).
+- **Key difference from Pattern B:** Standard Pattern B uses a 1-bit register providing exactly 1-cycle delay. This variant uses a wider counter with comparison, providing configurable multi-cycle delays.
+
+### System Task Actions ($finish and $display)
+
+Inside `always_ff` blocks, `if (EVENTS0[i].event_current)` guards may contain SystemVerilog system tasks instead of (or in addition to) register updates:
+
+- **`$finish`** — The FSM terminates simulation at this event. In the FSM description, record this as an action: `Action: $finish (terminate simulation)`. This typically appears in one-shot FSMs or after a final iteration.
+- **`$display("format", args)`** — The FSM emits debug output at this event. Record as: `Action: $display("format", args)`. Treat the format string and arguments as documentation of what the FSM is doing at that state.
+
+These system tasks are FSM actions just like register updates — they fire when the guarding event is active. Include them in the Phase 4 state actions and Phase 5 output.
+
 ### Multiple Threads
 
 Some modules may have multiple independent EVENTS arrays (`EVENTS0`, `EVENTS1`, etc.) representing concurrent threads. Analyze each thread independently, then note any shared registers or signals between threads.
@@ -661,6 +690,715 @@ Different sync states may wait on different external signals. The `CONDITION` in
 ### Output-Only Modules
 
 Some modules may have no state register (`r_q`) and only drive outputs based on which events are active. The FSM is still present — the events define the states — but the only visible behavior is the output signal changes.
+
+### Multi-Module Designs
+
+A SystemVerilog file may contain multiple `module` definitions. Analyze each module independently using the same 5-phase process. Then describe inter-module connections:
+
+1. **Identify instantiations:** Look for module instantiation syntax: `ModuleName instance_name ( .port(signal), ... );`
+2. **Map port connections:** Named port connections use the syntax `._port_name(signal_name)`. Map each sub-module port to the signal in the parent module it connects to.
+3. **Describe inter-module wiring:** In the Phase 5 output, add an "Inter-Module Connections" section listing which parent signals connect to which sub-module ports.
+4. **Handshake pairs:** If a parent drives `_req_valid`/`_req_0` into a sub-module and reads `_req_ack` back, this forms a request handshake. Similarly for `_resp_valid`/`_resp_0`/`_resp_ack` response handshakes. Document these as handshake channels.
+
+### Combinational Selector / Output Mux Pattern
+
+Some modules use an `always_comb` block paired with a registered selector to multiplex output data from different branches:
+
+```systemverilog
+logic[0:0] _e_resp_valid_selector_q, _e_resp_valid_selector_n;
+assign _e_resp_0 = (_e_resp_valid_selector_n == 1'd0) ? value_A
+                 : (_e_resp_valid_selector_n == 1'd1) ? value_B
+                 : '0;
+always_comb begin: _thread_0_selector
+  _e_resp_valid_selector_n = _e_resp_valid_selector_q;
+  if (branch_A_active) _e_resp_valid_selector_n = 1'd0;
+  if (branch_B_active) _e_resp_valid_selector_n = 1'd1;
+end
+always_ff @(posedge clk_i or negedge rst_ni) begin : _thread_0_selector_trans
+  if (~rst_ni) _e_resp_valid_selector_q <= '0;
+  else         _e_resp_valid_selector_q <= _e_resp_valid_selector_n;
+end
+```
+
+- **Meaning:** The selector tracks which branch was most recently active. The `always_comb` block updates `_selector_n` combinationally whenever a branch becomes active. The `always_ff` block registers this selection for the next cycle. The output mux uses `_selector_n` (combinational, so it reflects the current-cycle branch) to choose which data value to drive on the output.
+- **FSM interpretation:** This is NOT a new state — it is an output multiplexer. The selector value determines which branch's data appears on the output port. Document it in the "Outputs" section of the FSM description, showing which output value corresponds to which branch/selector value.
+- **Key signals:** `_selector_q` (registered, previous branch), `_selector_n` (combinational, current branch), output mux (ternary chain selecting data based on `_selector_n`).
+
+### Truncated or Malformed Input
+
+If a module is missing its header (e.g., the file starts mid-code with `ys_ff @(...)` instead of a `module` declaration), do NOT fail. Instead:
+1. Infer the module name as `unknown` or from any available context (filename, comments).
+2. Infer ports from usage — signals that appear in `assign` outputs or `input`/`output` keywords found later in the code.
+3. Continue analysis from the available code, starting from whatever declarations or `always_ff` blocks are present.
+4. Note in the Phase 5 output that the module header was missing/truncated.
+
+---
+
+## Worked Example 3: Multi-Cycle Counter with $finish (Code 5)
+
+### Input Code
+
+```systemverilog
+module Top (
+  input logic[0:0] clk_i,
+  input logic[0:0] rst_ni
+);
+  always_ff @(posedge clk_i or negedge rst_ni) begin : _proc_transition
+    if (~rst_ni) begin
+    end
+  end
+  localparam logic[0:0] thread_0_wire$0 = 1'b1;
+  localparam logic[0:0] thread_0_wire$1 = 1'b1;
+  for (genvar i = 0; i < 4; i ++) begin : EVENTS0
+    logic event_current;
+    end
+  logic _init_0;
+  logic _thread_0_event_counter_3_1_q, _thread_0_event_counter_3_1_n;
+  logic[1:0] _thread_0_event_counter_1_q, _thread_0_event_counter_1_n;
+  assign EVENTS0[3].event_current = _thread_0_event_counter_3_1_q;
+  assign _thread_0_event_counter_3_1_n = EVENTS0[1].event_current;
+  assign EVENTS0[2].event_current = EVENTS0[1].event_current && !thread_0_wire$1;
+  assign EVENTS0[1].event_current = _thread_0_event_counter_1_q == 2'd2;
+    assign _thread_0_event_counter_1_n = EVENTS0[0].event_current ? 2'd1 : EVENTS0[1].event_current ? '0 : _thread_0_event_counter_1_q ? (_thread_0_event_counter_1_q + 2'd1) : _thread_0_event_counter_1_q;
+  assign EVENTS0[0].event_current = _init_0 || EVENTS0[3].event_current;
+  always_ff @(posedge clk_i or negedge rst_ni) begin : _thread_0_st_transition
+    if (~rst_ni) begin
+      _init_0 <= 1'b1;
+      _thread_0_event_counter_3_1_q <= '0;
+      _thread_0_event_counter_1_q <= '0;
+    end else begin
+      if (EVENTS0[3].event_current) begin
+        $finish;
+      end
+      if (EVENTS0[2].event_current) begin
+        $display("Value is %d", thread_0_wire$0);
+      end
+      _init_0 <= 1'b0;
+      _thread_0_event_counter_3_1_q <= _thread_0_event_counter_3_1_n;
+      _thread_0_event_counter_1_q <= _thread_0_event_counter_1_n;
+    end
+  end
+endmodule
+```
+
+### Phase 1 Analysis
+
+**Ports:**
+
+| Port | Direction | Width | Classification |
+|---|---|---|---|
+| `clk_i` | input | 1 | Clock |
+| `rst_ni` | input | 1 | Reset (active-low) |
+
+No data inputs or outputs — this is a self-contained test module.
+
+**Internal Signals:**
+
+| Signal | Classification |
+|---|---|
+| `thread_0_wire$0` | Datapath wire (localparam = `1'b1`) |
+| `thread_0_wire$1` | Datapath wire (localparam = `1'b1`) — branch condition |
+| `_init_0` | Init one-shot |
+| `_thread_0_event_counter_3_1_q/_n` | Event counter at index 3 (1-bit, 1-cycle delay) |
+| `_thread_0_event_counter_1_q/_n` | Event counter at index 1 (2-bit, multi-cycle delay with comparison) |
+
+**Constants:** `thread_0_wire$0 = 1'b1`, `thread_0_wire$1 = 1'b1`. No state register (`r_q`) in this module.
+
+### Phase 2 Analysis
+
+**EVENTS0 has 4 elements (indices 0..3).**
+
+| Event | Assign Statement | Pattern | Predecessor(s) | Condition |
+|---|---|---|---|---|
+| `EVENTS0[0]` | `= _init_0 \|\| EVENTS0[3]` | **A: Init/Feedback** | _init_0, EVENTS0[3] | — |
+| `EVENTS0[1]` | `= _thread_0_event_counter_1_q == 2'd2` | **B variant: Multi-cycle counter** | EVENTS0[0] | counter == 2 |
+| `EVENTS0[2]` | `= EVENTS0[1] && !thread_0_wire$1` | **D: Branch (false)** | EVENTS0[1] | `!thread_0_wire$1` (always false) |
+| `EVENTS0[3]` | `= _thread_0_event_counter_3_1_q` | **B: Counter (1-cycle delay)** | EVENTS0[1] | — |
+
+**Multi-cycle counter detail (`_thread_0_event_counter_1`):**
+- Width: `logic[1:0]` (2-bit counter)
+- Fires when: `_q == 2'd2`
+- Next-state logic (chained ternary):
+  - `EVENTS0[0]` fires → load `2'd1` (start counting)
+  - `EVENTS0[1]` fires → clear to `'0` (done, reset counter)
+  - `_q != 0` → increment (`_q + 2'd1`)
+  - Otherwise → hold at 0 (idle)
+- Cycle count: EVENTS0[0] fires → counter loads 1 → next cycle counter becomes 2 → `== 2'd2` is true → EVENTS0[1] fires. That is a **2-cycle delay** from EVENTS0[0] to EVENTS0[1].
+
+**Event graph:**
+```
+_init_0 --> EVENTS0[0] --[2-cycle counter]--> EVENTS0[1]
+                ^                                |
+                |                        +-------+-------+
+                |                        |               |
+                |                  (wire$1=true)   (!wire$1=false)
+                |                        |               |
+                |                   [1-cycle delay]  EVENTS0[2] [DEAD]
+                |                        |           ($display)
+                |                   EVENTS0[3]
+                |                   ($finish)
+                |________________________|
+                        (feedback)
+```
+
+Feedback loop present: `EVENTS0[0]` feeds back from `EVENTS0[3]`. However, `EVENTS0[3]` triggers `$finish`, so the loop only executes once before simulation terminates.
+
+### Phase 3 Analysis
+
+**Datapath:** `thread_0_wire$0 = 1'b1` (used in `$display`), `thread_0_wire$1 = 1'b1` (branch condition).
+
+**Scheduling:** 4 events. Multi-cycle counter provides 2-cycle delay from event 0 to event 1. Branch at event 1 (always-true). 1-cycle delay from event 1 to event 3.
+
+**Sequential actions by event:**
+
+| Event | Action |
+|---|---|
+| EVENTS0[3] | `$finish` (terminate simulation) |
+| EVENTS0[2] | `$display("Value is %d", 1)` (dead — never fires) |
+
+### Phase 4 Analysis
+
+**States:**
+
+- **S0: Init / Start Counter** — Entered via `_init_0` (first cycle) or feedback from S2. Action: counter loads `2'd1` (begins counting). No register updates.
+- **S1: Counter Reached — Branch** — Entered when counter `== 2'd2` (2 cycles after S0). EVENTS0[1] fires. Branch on `thread_0_wire$1` (always true) → EVENTS0[3] path. Counter clears to 0. EVENTS0[2] (false branch with `$display`) is dead code.
+- **S2: Finish** — 1 cycle after S1 (via counter at EVENTS0[3]). Action: `$finish`. Feeds back to S0 combinationally, but `$finish` ends simulation first.
+
+### Phase 5 Output
+
+```
+=== FSM Description: Top ===
+
+--- Interface ---
+Inputs:  (none besides clock/reset)
+Outputs: (none)
+Clock:   clk_i (posedge)
+Reset:   rst_ni (active-low, asynchronous)
+
+--- Registers ---
+(no state registers)
+_thread_0_event_counter_1_q [2] - reset value: 0 - multi-cycle delay counter
+_thread_0_event_counter_3_1_q [1] - reset value: 0 - 1-cycle delay counter
+
+--- States ---
+S0: Init / Start Counter
+  Entry: _init_0 one-shot (first cycle) OR feedback from S2
+  Actions: counter_1 loads 2'd1 (start counting)
+  Transitions:
+    -> S1 [after 2-cycle delay, when counter_1 == 2'd2]
+
+S1: Counter Reached — Branch
+  Entry: counter_1_q == 2'd2 (2 cycles after S0)
+  Actions: counter_1 clears to 0
+  Transitions:
+    -> S2 [unconditional, 1-cycle delay via counter_3]
+    -> (dead branch: $display, never taken since !thread_0_wire$1 = false)
+
+S2: Finish
+  Entry: 1 cycle after S1
+  Actions: $finish (terminate simulation)
+  Transitions:
+    -> S0 [combinational feedback, but $finish halts simulation]
+
+--- Reset Behavior ---
+On reset (rst_ni = 0):
+  _init_0         <= 1'b1
+  counter_1_q     <= 2'b00
+  counter_3_1_q   <= 1'b0
+  FSM begins in S0 via _init_0 one-shot.
+
+--- Timing ---
+Cycle 0 (first posedge after reset release):
+  _init_0=1 -> EVENTS0[0]=1 -> counter_1_n=2'd1, _init_0 <= 0
+Cycle 1:
+  counter_1_q=2'd1 -> != 2'd2 -> EVENTS0[1]=0
+  counter_1_n = 2'd1 + 2'd1 = 2'd2 (increment)
+Cycle 2:
+  counter_1_q=2'd2 -> EVENTS0[1]=1 -> counter_1_n='0 (clear)
+  Branch: thread_0_wire$1=1 -> EVENTS0[3] path taken
+  counter_3_1_n=1
+Cycle 3:
+  counter_3_1_q=1 -> EVENTS0[3]=1 -> $finish (simulation ends)
+  EVENTS0[0]=1 (feedback), but $finish terminates first.
+
+--- Notes ---
+- EVENTS0[2] ($display branch) is dead code: thread_0_wire$1 = 1'b1
+  makes !thread_0_wire$1 always false.
+- The multi-cycle counter at index 1 uses a 2-bit register with
+  comparison (== 2'd2) instead of the standard 1-bit Pattern B.
+  It provides a 2-cycle delay from EVENTS0[0] to EVENTS0[1].
+- This FSM runs exactly once (3 cycles) then terminates via $finish.
+- Despite the feedback loop, $finish prevents a second iteration.
+```
+
+---
+
+## Worked Example 4: Multi-Module Design with Selector (Code 10)
+
+### Input Code
+
+This example contains two modules: `Sub` (a responder with branching and output selector) and `Top` (which instantiates `Sub` and runs a simple loop with `$finish`).
+
+**Module Sub:**
+```systemverilog
+module Sub (
+  input logic[0:0] clk_i,
+  input logic[0:0] rst_ni,
+  output logic[0:0] _e_req_ack,
+  input logic[0:0] _e_req_valid,
+  input logic[0:0] _e_req_0,
+  input logic[0:0] _e_resp_ack,
+  output logic[0:0] _e_resp_valid,
+  output logic[0:0] _e_resp_0
+);
+  always_ff @(posedge clk_i or negedge rst_ni) begin : _proc_transition
+    if (~rst_ni) begin
+    end
+  end
+  logic[0:0] thread_0_wire$1;
+  logic[0:0] thread_0_wire$0;
+  assign thread_0_wire$0 = _e_req_valid;
+  assign thread_0_wire$1 = _e_req_0;
+  localparam logic[0:0] thread_0_wire$2 = 1'b1;
+  localparam logic[0:0] thread_0_wire$3 = 1'b1;
+  localparam logic[0:0] thread_0_wire$4 = 1'b0;
+  for (genvar i = 0; i < 11; i ++) begin : EVENTS0
+    logic event_current;
+    end
+  logic _init_0;
+  logic _thread_0_event_syncstate_9_q, _thread_0_event_syncstate_9_n;
+  logic _thread_0_event_counter_8_1_q, _thread_0_event_counter_8_1_n;
+  logic _thread_0_event_syncstate_6_q, _thread_0_event_syncstate_6_n;
+  logic _thread_0_event_counter_5_1_q, _thread_0_event_counter_5_1_n;
+  logic _thread_0_event_counter_2_1_q, _thread_0_event_counter_2_1_n;
+  assign EVENTS0[10].event_current = EVENTS0[9].event_current || EVENTS0[6].event_current || EVENTS0[2].event_current;
+  assign EVENTS0[9].event_current = (EVENTS0[8].event_current || _thread_0_event_syncstate_9_q) && _e_resp_ack;
+    assign _thread_0_event_syncstate_9_n = (EVENTS0[8].event_current || _thread_0_event_syncstate_9_q) && !_e_resp_ack;
+  assign EVENTS0[8].event_current = _thread_0_event_counter_8_1_q;
+  assign _thread_0_event_counter_8_1_n = EVENTS0[7].event_current;
+  assign EVENTS0[7].event_current = EVENTS0[3].event_current && thread_0_wire$2;
+  assign EVENTS0[6].event_current = (EVENTS0[5].event_current || _thread_0_event_syncstate_6_q) && _e_resp_ack;
+    assign _thread_0_event_syncstate_6_n = (EVENTS0[5].event_current || _thread_0_event_syncstate_6_q) && !_e_resp_ack;
+  assign EVENTS0[5].event_current = _thread_0_event_counter_5_1_q;
+  assign _thread_0_event_counter_5_1_n = EVENTS0[4].event_current;
+  assign EVENTS0[4].event_current = EVENTS0[3].event_current && !thread_0_wire$2;
+  assign EVENTS0[3].event_current = EVENTS0[0].event_current && thread_0_wire$0;
+  assign EVENTS0[2].event_current = _thread_0_event_counter_2_1_q;
+  assign _thread_0_event_counter_2_1_n = EVENTS0[1].event_current;
+  assign EVENTS0[1].event_current = EVENTS0[0].event_current && !thread_0_wire$0;
+  assign EVENTS0[0].event_current = _init_0 || EVENTS0[10].event_current;
+  assign _e_req_ack = EVENTS0[3].event_current;
+  assign _e_resp_valid = (EVENTS0[5].event_current || _thread_0_event_syncstate_6_q) || (EVENTS0[8].event_current || _thread_0_event_syncstate_9_q);
+  logic[0:0] _e_resp_valid_selector_q, _e_resp_valid_selector_n;
+  assign _e_resp_0 = (_e_resp_valid_selector_n == 1'd0) ? thread_0_wire$4 : (_e_resp_valid_selector_n == 1'd1) ? thread_0_wire$3 : '0;
+  always_comb begin: _thread_0_selector
+    _e_resp_valid_selector_n = _e_resp_valid_selector_q;
+    if ((EVENTS0[5].event_current || _thread_0_event_syncstate_6_q)) _e_resp_valid_selector_n = 1'd0;
+    if ((EVENTS0[8].event_current || _thread_0_event_syncstate_9_q)) _e_resp_valid_selector_n = 1'd1;
+  end
+  always_ff @(posedge clk_i or negedge rst_ni) begin : _thread_0_selector_trans
+    if (~rst_ni) begin
+      _e_resp_valid_selector_q <= '0;
+    end else begin
+      _e_resp_valid_selector_q <= _e_resp_valid_selector_n;
+    end
+  end
+  always_ff @(posedge clk_i or negedge rst_ni) begin : _thread_0_st_transition
+    if (~rst_ni) begin
+      _init_0 <= 1'b1;
+      _thread_0_event_syncstate_9_q <= '0;
+      _thread_0_event_counter_8_1_q <= '0;
+      _thread_0_event_syncstate_6_q <= '0;
+      _thread_0_event_counter_5_1_q <= '0;
+      _thread_0_event_counter_2_1_q <= '0;
+    end else begin
+      if (EVENTS0[3].event_current) begin
+      end
+      _init_0 <= 1'b0;
+      _thread_0_event_syncstate_9_q <= _thread_0_event_syncstate_9_n;
+      _thread_0_event_counter_8_1_q <= _thread_0_event_counter_8_1_n;
+      _thread_0_event_syncstate_6_q <= _thread_0_event_syncstate_6_n;
+      _thread_0_event_counter_5_1_q <= _thread_0_event_counter_5_1_n;
+      _thread_0_event_counter_2_1_q <= _thread_0_event_counter_2_1_n;
+    end
+  end
+endmodule
+```
+
+**Module Top:**
+```systemverilog
+module Top (
+  input logic[0:0] clk_i,
+  input logic[0:0] rst_ni
+);
+  logic[0:0] _le_req_ack;
+  logic[0:0] _le_req_valid;
+  logic[0:0] _le_req_0;
+  logic[0:0] _le_resp_ack;
+  logic[0:0] _le_resp_valid;
+  logic[0:0] _le_resp_0;
+  Sub _spawn_0 (
+    .clk_i,
+    .rst_ni
+    ,._e_resp_valid (_le_resp_valid)
+    ,._e_resp_ack (_le_resp_ack)
+    ,._e_resp_0 (_le_resp_0)
+    ,._e_req_valid (_le_req_valid)
+    ,._e_req_ack (_le_req_ack)
+    ,._e_req_0 (_le_req_0)
+  );
+  always_ff @(posedge clk_i or negedge rst_ni) begin : _proc_transition
+    if (~rst_ni) begin
+    end
+  end
+  for (genvar i = 0; i < 2; i ++) begin : EVENTS0
+    logic event_current;
+    end
+  logic _init_0;
+  logic _thread_0_event_counter_1_1_q, _thread_0_event_counter_1_1_n;
+  assign EVENTS0[1].event_current = _thread_0_event_counter_1_1_q;
+  assign _thread_0_event_counter_1_1_n = EVENTS0[0].event_current;
+  assign EVENTS0[0].event_current = _init_0 || EVENTS0[1].event_current;
+  always_ff @(posedge clk_i or negedge rst_ni) begin : _thread_0_st_transition
+    if (~rst_ni) begin
+      _init_0 <= 1'b1;
+      _thread_0_event_counter_1_1_q <= '0;
+    end else begin
+      if (EVENTS0[1].event_current) begin
+        $finish;
+      end
+      _init_0 <= 1'b0;
+      _thread_0_event_counter_1_1_q <= _thread_0_event_counter_1_1_n;
+    end
+  end
+endmodule
+```
+
+### Phase 1 Analysis — Module Sub
+
+**Ports:**
+
+| Port | Direction | Width | Classification |
+|---|---|---|---|
+| `clk_i` | input | 1 | Clock |
+| `rst_ni` | input | 1 | Reset (active-low) |
+| `_e_req_valid` | input | 1 | Data Input (request handshake valid) |
+| `_e_req_0` | input | 1 | Data Input (request data) |
+| `_e_req_ack` | output | 1 | Data Output (request handshake ack) |
+| `_e_resp_ack` | input | 1 | Data Input (response handshake ack) |
+| `_e_resp_valid` | output | 1 | Data Output (response handshake valid) |
+| `_e_resp_0` | output | 1 | Data Output (response data) |
+
+**Internal Signals:**
+
+| Signal | Classification |
+|---|---|
+| `thread_0_wire$0` | Datapath wire (assign = `_e_req_valid`) — runtime condition |
+| `thread_0_wire$1` | Datapath wire (assign = `_e_req_0`) — runtime data |
+| `thread_0_wire$2` | Datapath wire (localparam = `1'b1`) — branch condition |
+| `thread_0_wire$3` | Datapath wire (localparam = `1'b1`) — response data for true branch |
+| `thread_0_wire$4` | Datapath wire (localparam = `1'b0`) — response data for false branch |
+| `_init_0` | Init one-shot |
+| `_thread_0_event_counter_2_1_q/_n` | Event counter at index 2 |
+| `_thread_0_event_counter_5_1_q/_n` | Event counter at index 5 |
+| `_thread_0_event_counter_8_1_q/_n` | Event counter at index 8 |
+| `_thread_0_event_syncstate_6_q/_n` | Sync state at index 6 |
+| `_thread_0_event_syncstate_9_q/_n` | Sync state at index 9 |
+| `_e_resp_valid_selector_q/_n` | Output selector register |
+
+### Phase 1 Analysis — Module Top
+
+**Ports:**
+
+| Port | Direction | Width | Classification |
+|---|---|---|---|
+| `clk_i` | input | 1 | Clock |
+| `rst_ni` | input | 1 | Reset (active-low) |
+
+**Internal Signals:**
+
+| Signal | Classification |
+|---|---|
+| `_le_req_ack`, `_le_req_valid`, `_le_req_0` | Inter-module wires (request channel to Sub) |
+| `_le_resp_ack`, `_le_resp_valid`, `_le_resp_0` | Inter-module wires (response channel from Sub) |
+| `_init_0` | Init one-shot |
+| `_thread_0_event_counter_1_1_q/_n` | Event counter at index 1 |
+
+**Sub-module instantiation:** `Sub _spawn_0` with named port connections mapping `_le_*` signals to Sub's `_e_*` ports.
+
+### Phase 2 Analysis — Module Sub
+
+**EVENTS0 has 11 elements (indices 0..10).**
+
+| Event | Assign Statement | Pattern | Predecessor(s) | Condition |
+|---|---|---|---|---|
+| `EVENTS0[0]` | `= _init_0 \|\| EVENTS0[10]` | **A: Init/Feedback** | _init_0, EVENTS0[10] | — |
+| `EVENTS0[1]` | `= EVENTS0[0] && !thread_0_wire$0` | **D: Branch (false)** | EVENTS0[0] | `!_e_req_valid` |
+| `EVENTS0[2]` | `= _thread_0_event_counter_2_1_q` | **B: Counter** | EVENTS0[1] | — |
+| `EVENTS0[3]` | `= EVENTS0[0] && thread_0_wire$0` | **D: Branch (true)** | EVENTS0[0] | `_e_req_valid` |
+| `EVENTS0[4]` | `= EVENTS0[3] && !thread_0_wire$2` | **D: Branch (false)** | EVENTS0[3] | `!1'b1` (always false) |
+| `EVENTS0[5]` | `= _thread_0_event_counter_5_1_q` | **B: Counter** | EVENTS0[4] | — |
+| `EVENTS0[6]` | `= (EVENTS0[5] \|\| syncstate_6_q) && _e_resp_ack` | **C: Sync State** | EVENTS0[5] | `_e_resp_ack` |
+| `EVENTS0[7]` | `= EVENTS0[3] && thread_0_wire$2` | **D: Branch (true)** | EVENTS0[3] | `1'b1` (always true) |
+| `EVENTS0[8]` | `= _thread_0_event_counter_8_1_q` | **B: Counter** | EVENTS0[7] | — |
+| `EVENTS0[9]` | `= (EVENTS0[8] \|\| syncstate_9_q) && _e_resp_ack` | **C: Sync State** | EVENTS0[8] | `_e_resp_ack` |
+| `EVENTS0[10]` | `= EVENTS0[9] \|\| EVENTS0[6] \|\| EVENTS0[2]` | **E: Merge (3-way)** | EVENTS0[9], EVENTS0[6], EVENTS0[2] | — |
+
+**Event graph:**
+```
+_init_0 --> EVENTS0[0] --------+------ branch on _e_req_valid ------+
+                ^               |                                     |
+                |          (_e_req_valid=1)                    (!_e_req_valid)
+                |               |                                     |
+                |          EVENTS0[3] --+-- branch on wire$2 --+  EVENTS0[1]
+                |          (_e_req_ack=1)|                      |      |
+                |                  (wire$2=true)        (!wire$2=false)[1-cycle]
+                |                       |                [DEAD] |      |
+                |                  EVENTS0[7]           EVENTS0[4] EVENTS0[2]
+                |                       |                   |         |
+                |                  [1-cycle]            [1-cycle]     |
+                |                       |                   |         |
+                |                  EVENTS0[8]           EVENTS0[5]    |
+                |                       |                   |         |
+                |               [sync: _e_resp_ack]  [sync: _e_resp_ack]
+                |                       |              [DEAD] |       |
+                |                  EVENTS0[9]           EVENTS0[6]    |
+                |                       |                   |         |
+                |                       +-------+-----------+---------+
+                |                               |
+                |                          EVENTS0[10] (3-way merge)
+                |_______________________________|
+                           (feedback)
+```
+
+**Key observations:**
+- First branch at EVENTS0[0] is on `_e_req_valid` (runtime signal — NOT constant).
+- Second branch at EVENTS0[3] is on `thread_0_wire$2 = 1'b1` (constant true), so EVENTS0[4] (false path) is dead code. EVENTS0[5], EVENTS0[6] are also dead.
+- The live path is: EVENTS0[0] → (if `_e_req_valid`) → EVENTS0[3] → EVENTS0[7] → EVENTS0[8] → (wait `_e_resp_ack`) → EVENTS0[9] → EVENTS0[10] → feedback.
+- The no-request path is: EVENTS0[0] → (if `!_e_req_valid`) → EVENTS0[1] → EVENTS0[2] → EVENTS0[10] → feedback.
+
+**Selector pattern:**
+- `_e_resp_valid_selector_n` is updated combinationally: set to `0` when the false-branch resp path is active (EVENTS0[5]/syncstate_6), set to `1` when the true-branch resp path is active (EVENTS0[8]/syncstate_9).
+- `_e_resp_0` mux: selector `0` → `thread_0_wire$4 = 1'b0`, selector `1` → `thread_0_wire$3 = 1'b1`.
+- Since only the true branch (selector=1) is live, `_e_resp_0` will always be `1'b1` in practice.
+
+### Phase 2 Analysis — Module Top
+
+**EVENTS0 has 2 elements (indices 0..1).**
+
+| Event | Assign Statement | Pattern | Predecessor(s) | Condition |
+|---|---|---|---|---|
+| `EVENTS0[0]` | `= _init_0 \|\| EVENTS0[1]` | **A: Init/Feedback** | _init_0, EVENTS0[1] | — |
+| `EVENTS0[1]` | `= _thread_0_event_counter_1_1_q` | **B: Counter** | EVENTS0[0] | — |
+
+Simple 2-event loop with feedback. Same structure as Worked Example 1.
+
+### Phase 3 Analysis — Module Sub
+
+**Datapath:**
+
+| Wire | Type | Value / Expression | Purpose |
+|---|---|---|---|
+| `thread_0_wire$0` | assign | `_e_req_valid` | Runtime branch condition |
+| `thread_0_wire$1` | assign | `_e_req_0` | Runtime request data (unused in actions) |
+| `thread_0_wire$2` | localparam | `1'b1` | Second branch condition (always true) |
+| `thread_0_wire$3` | localparam | `1'b1` | Response data for true branch |
+| `thread_0_wire$4` | localparam | `1'b0` | Response data for false branch |
+
+**Scheduling:** 11 events. Two levels of branching, three counter delays, two sync waits, one 3-way merge.
+
+**Sequential actions by event:**
+
+| Event | Action |
+|---|---|
+| EVENTS0[3] | (empty block — no register update, but `_e_req_ack` is asserted combinationally) |
+
+**Outputs:**
+- `_e_req_ack = EVENTS0[3]` — ack pulses for one cycle when request is accepted.
+- `_e_resp_valid = (EVENTS0[5] || syncstate_6_q) || (EVENTS0[8] || syncstate_9_q)` — asserted while waiting for response ack (on either branch).
+- `_e_resp_0` — driven by selector mux: `0` if false branch active, `1` if true branch active.
+
+### Phase 3 Analysis — Module Top
+
+**Datapath:** None (no localparams or wires).
+
+**Scheduling:** 2 events in a loop.
+
+**Sequential actions by event:**
+
+| Event | Action |
+|---|---|
+| EVENTS0[1] | `$finish` (terminate simulation) |
+
+### Phase 4 Analysis — Module Sub
+
+**States:**
+
+- **S0: Wait for Request** — EVENTS0[0] fires (via `_init_0` or feedback). Branch on `_e_req_valid`:
+  - If `_e_req_valid = 1` → EVENTS0[3] fires (same cycle). `_e_req_ack` asserted. Transition to S1.
+  - If `_e_req_valid = 0` → EVENTS0[1] fires (same cycle). Transition to S_skip.
+- **S_skip: No-Request Delay** — EVENTS0[2] fires (1 cycle after EVENTS0[1] via counter). EVENTS0[10] (merge) fires same cycle. Feeds back to S0. This path provides a 1-cycle idle loop when no request is pending.
+- **S1: Process Request — True Branch Delay** — 1 cycle after EVENTS0[7] fires (same cycle as EVENTS0[3], since `thread_0_wire$2=1`). EVENTS0[8] fires via counter.
+- **S2: Wait for Response Ack (True Branch)** — EVENTS0[8] active, sync wait on `_e_resp_ack`. `_e_resp_valid` asserted, selector=1, `_e_resp_0 = 1'b1`. When `_e_resp_ack` received → EVENTS0[9] fires → EVENTS0[10] (merge) → feedback to S0.
+
+**Note:** Dead states from the false branch (EVENTS0[4] → EVENTS0[5] → EVENTS0[6]) are omitted since `thread_0_wire$2 = 1'b1` makes that path unreachable.
+
+### Phase 4 Analysis — Module Top
+
+**States:**
+
+- **S0: Init** — EVENTS0[0] fires. No actions. Counter starts.
+- **S1: Finish** — EVENTS0[1] fires (1 cycle after S0). Action: `$finish`. Feeds back to S0, but `$finish` halts simulation.
+
+### Phase 5 Output
+
+```
+=== FSM Description: Sub ===
+
+--- Interface ---
+Inputs:  _e_req_valid [1] - Request handshake valid
+         _e_req_0 [1] - Request data
+         _e_resp_ack [1] - Response handshake ack from consumer
+Outputs: _e_req_ack [1] - Request ack (pulses when request accepted)
+         _e_resp_valid [1] - Response valid (asserted while waiting for resp ack)
+         _e_resp_0 [1] - Response data (muxed by selector: 0 or 1)
+Clock:   clk_i (posedge)
+Reset:   rst_ni (active-low, asynchronous)
+
+--- Registers ---
+_e_resp_valid_selector_q [1] - reset value: 0 - tracks which branch drives response
+(no state registers — all behavior is in event scheduling and outputs)
+
+--- Output Selector ---
+_e_resp_0 is driven by a combinational mux:
+  selector_n == 0 -> thread_0_wire$4 = 1'b0 (false branch data)
+  selector_n == 1 -> thread_0_wire$3 = 1'b1 (true branch data)
+The selector updates to 0 when the false-branch resp path is active,
+and to 1 when the true-branch resp path is active.
+
+--- States ---
+S0: Wait for Request
+  Entry: _init_0 one-shot OR feedback from S2/S_skip
+  Actions: (none)
+  Outputs: _e_req_ack = 0, _e_resp_valid = 0
+  Transitions:
+    -> S1 [when _e_req_valid = 1, same cycle; _e_req_ack pulses]
+    -> S_skip [when _e_req_valid = 0, same cycle]
+
+S_skip: No-Request Idle
+  Entry: same cycle as S0 when _e_req_valid = 0
+  Actions: (none)
+  Transitions:
+    -> S0 [after 1-cycle delay via counter_2, combinational feedback through merge]
+
+S1: Response Delay (True Branch)
+  Entry: 1 cycle after request accepted (EVENTS0[7] -> counter_8)
+  Actions: (none)
+  Outputs: _e_resp_valid = 0
+  Transitions:
+    -> S2 [unconditional, enters sync wait]
+
+S2: Wait for Response Ack (True Branch)
+  Entry: EVENTS0[8] fires, enters sync wait on _e_resp_ack
+  Actions: (none)
+  Outputs: _e_resp_valid = 1, _e_resp_0 = 1 (selector=1, true branch)
+  Transitions:
+    -> S2 [while _e_resp_ack = 0, hold via syncstate_9]
+    -> S0 [when _e_resp_ack = 1, via merge EVENTS0[10] -> feedback]
+
+--- Reset Behavior ---
+On reset (rst_ni = 0):
+  _init_0          <= 1'b1
+  counter_2_1_q    <= 1'b0
+  counter_5_1_q    <= 1'b0
+  counter_8_1_q    <= 1'b0
+  syncstate_6_q    <= 1'b0
+  syncstate_9_q    <= 1'b0
+  selector_q       <= 1'b0
+  FSM begins in S0 via _init_0 one-shot.
+
+--- Timing ---
+Cycle 0: _init_0=1 -> EVENTS0[0]=1.
+  If _e_req_valid=1: EVENTS0[3]=1 -> _e_req_ack=1, EVENTS0[7]=1
+    counter_8_1_n=1. Selector_n=1.
+  If _e_req_valid=0: EVENTS0[1]=1 -> counter_2_1_n=1.
+Cycle 1 (assuming req_valid=1 at cycle 0):
+  counter_8_1_q=1 -> EVENTS0[8]=1 -> _e_resp_valid=1.
+  If _e_resp_ack=0: syncstate_9_n=1 (hold).
+  If _e_resp_ack=1: EVENTS0[9]=1 -> EVENTS0[10]=1 -> EVENTS0[0]=1 (feedback).
+Cycle 1 (assuming req_valid=0 at cycle 0):
+  counter_2_1_q=1 -> EVENTS0[2]=1 -> EVENTS0[10]=1 -> EVENTS0[0]=1 (feedback).
+  Back to S0, checking _e_req_valid again.
+
+--- Notes ---
+- EVENTS0[4] (false branch of second split) is dead code:
+  thread_0_wire$2 = 1'b1, so !thread_0_wire$2 = 0.
+  EVENTS0[5] and EVENTS0[6] are also dead (downstream of EVENTS0[4]).
+- The 3-way merge at EVENTS0[10] joins the true-branch response path,
+  the dead false-branch response path, and the no-request idle path.
+- The selector pattern determines _e_resp_0 output data. In practice,
+  only selector=1 (true branch, data=1) is reachable.
+```
+
+```
+=== FSM Description: Top ===
+
+--- Interface ---
+Inputs:  (none besides clock/reset)
+Outputs: (none — all I/O is through Sub instance)
+Clock:   clk_i (posedge)
+Reset:   rst_ni (active-low, asynchronous)
+
+--- Sub-Module Instantiation ---
+Instance: _spawn_0 (type: Sub)
+  Port Mapping:
+    Sub._e_req_valid  <-> Top._le_req_valid
+    Sub._e_req_ack    <-> Top._le_req_ack
+    Sub._e_req_0      <-> Top._le_req_0
+    Sub._e_resp_valid <-> Top._le_resp_valid
+    Sub._e_resp_ack   <-> Top._le_resp_ack
+    Sub._e_resp_0     <-> Top._le_resp_0
+  Channels:
+    Request channel:  Top drives _le_req_valid, _le_req_0 -> Sub; Sub drives _le_req_ack -> Top
+    Response channel: Sub drives _le_resp_valid, _le_resp_0 -> Top; Top drives _le_resp_ack -> Sub
+  Note: Top's EVENTS0 chain does NOT drive any of these signals.
+        The _le_* wires are declared but not assigned by Top's event logic.
+
+--- Registers ---
+(none)
+
+--- States ---
+S0: Init
+  Entry: _init_0 one-shot OR feedback from S1
+  Actions: (none)
+  Transitions:
+    -> S1 [unconditional, 1-cycle delay]
+
+S1: Finish
+  Entry: 1 cycle after S0
+  Actions: $finish (terminate simulation)
+  Transitions:
+    -> S0 [combinational feedback, but $finish halts simulation]
+
+--- Reset Behavior ---
+On reset (rst_ni = 0):
+  _init_0         <= 1'b1
+  counter_1_1_q   <= 1'b0
+  FSM begins in S0 via _init_0 one-shot.
+
+--- Timing ---
+Cycle 0: _init_0=1 -> EVENTS0[0]=1 -> counter_1_1_n=1, _init_0 <= 0
+Cycle 1: counter_1_1_q=1 -> EVENTS0[1]=1 -> $finish
+         Simulation terminates.
+
+--- Notes ---
+- Top's own FSM is trivial: init, then $finish after 1 cycle.
+- Sub runs concurrently. Whether Sub completes any request/response
+  handshake depends on the _le_* signal drivers (which Top does NOT
+  drive from its event chain — they are left undriven/default).
+- In a real system, another module or testbench would drive the
+  request/response channels. Here, $finish stops simulation immediately.
+```
 
 ---
 
