@@ -167,6 +167,7 @@ Each event counter or sync state that introduces a clock-cycle boundary defines 
 2. Each event that is the output of an event counter (`_q` register) defines a new state. The state number increments in event-index order.
 3. Each sync state defines a **wait state** (it may persist across multiple cycles).
 4. Branches and merges are transitions within or between states, not states themselves.
+5. Pattern A feedback is combinational: when EVENTS0[K] fires and feeds back to EVENTS0[0] via the OR in Pattern A, both EVENTS0[K] and EVENTS0[0] fire in the same clock cycle. The feedback target state (S0) is the dominant state for output computation in that cycle.
 
 ### 4.2 Define State Transitions
 
@@ -584,7 +585,7 @@ S0: Request (wait for ack)
 S1: Ack received — set r_q
   Entry: same cycle that _e_req_ack is sampled high
   Actions: r_q <= 1'b1
-  Outputs: _e_req_valid = 0
+  Outputs: _e_req_valid = 1
   Transitions:
     -> S2 [unconditional, 1-cycle delay]
 
@@ -598,7 +599,7 @@ S2: Clear r_q
 S3: Loop delay
   Entry: 1 cycle after S2
   Actions: (none)
-  Outputs: _e_req_valid = 0
+  Outputs: _e_req_valid = 1
   Transitions:
     -> S0 [unconditional, combinational feedback]
 
