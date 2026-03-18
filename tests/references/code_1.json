@@ -1,0 +1,65 @@
+{
+  "code_number": 1,
+  "module_name": "top",
+  "description": "Simple looping assignment — perpetually assigns r_q = 0 every cycle",
+  "interface": {
+    "inputs": [],
+    "outputs": [],
+    "clock": "clk_i",
+    "reset": "rst_ni"
+  },
+  "registers": [
+    {
+      "name": "r_q",
+      "width": 1,
+      "reset_value": "1'b0",
+      "description": "General-purpose state register"
+    }
+  ],
+  "states": [
+    {
+      "name": "S0",
+      "description": "Execute — assign r_q",
+      "entry": "_init_0 one-shot (first cycle) OR feedback from S1",
+      "events": ["EVENTS0[0]"]
+    },
+    {
+      "name": "S1",
+      "description": "Delay / Feedback",
+      "entry": "1 cycle after S0",
+      "events": ["EVENTS0[1]"]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "S0",
+      "to": "S1",
+      "condition": "unconditional",
+      "timing": "1-cycle delay"
+    },
+    {
+      "from": "S1",
+      "to": "S0",
+      "condition": "unconditional",
+      "timing": "combinational feedback"
+    }
+  ],
+  "outputs": [
+    {
+      "state": "S0",
+      "signal": "r_q",
+      "value": "1'b0",
+      "description": "r_q <= thread_0_wire$3 which resolves to 1'b0"
+    }
+  ],
+  "reset_behavior": {
+    "_init_0": "1'b1",
+    "r_q": "1'b0",
+    "_thread_0_event_counter_1_1_q": "1'b0"
+  },
+  "notes": [
+    "thread_0_wire$3 evaluates to constant 0 at compile time (ternary with wire$0=0 selects wire$2=0)",
+    "The two-state loop is effectively a single repeating action",
+    "FSM perpetually assigns r_q = 0 every cycle"
+  ]
+}

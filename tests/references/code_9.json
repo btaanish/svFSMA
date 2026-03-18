@@ -1,0 +1,236 @@
+{
+  "code_number": 9,
+  "modules": [
+    {
+      "module_name": "reggg",
+      "description": "Handshake responder — receives request via sync wait on _e_req_valid, displays received data, loops",
+      "interface": {
+        "inputs": [
+          {"name": "_e_req_valid", "width": 1, "description": "Request handshake valid from requester"},
+          {"name": "_e_req_0", "width": 1, "description": "Request data from requester"}
+        ],
+        "outputs": [
+          {"name": "_e_req_ack", "width": 1, "description": "Request acknowledge (asserted while waiting for valid)"}
+        ],
+        "clock": "clk_i",
+        "reset": "rst_ni"
+      },
+      "registers": [],
+      "states": [
+        {
+          "name": "S0",
+          "description": "Wait for request (sync wait on _e_req_valid)",
+          "entry": "_init_0 one-shot (first cycle) OR feedback from S1",
+          "events": ["EVENTS0[0]"]
+        },
+        {
+          "name": "S1",
+          "description": "Request received — display data",
+          "entry": "Same cycle _e_req_valid goes high",
+          "events": ["EVENTS0[1]"]
+        },
+        {
+          "name": "S2",
+          "description": "Loop delay",
+          "entry": "1 cycle after S1",
+          "events": ["EVENTS0[2]"]
+        }
+      ],
+      "transitions": [
+        {
+          "from": "S0",
+          "to": "S0",
+          "condition": "_e_req_valid = 0",
+          "timing": "hold via sync state"
+        },
+        {
+          "from": "S0",
+          "to": "S1",
+          "condition": "_e_req_valid = 1",
+          "timing": "combinational (same cycle)"
+        },
+        {
+          "from": "S1",
+          "to": "S2",
+          "condition": "unconditional",
+          "timing": "1-cycle delay"
+        },
+        {
+          "from": "S2",
+          "to": "S0",
+          "condition": "unconditional",
+          "timing": "combinational feedback"
+        }
+      ],
+      "outputs": [
+        {
+          "state": "S0",
+          "signal": "_e_req_ack",
+          "value": "1",
+          "description": "Asserted while waiting for request (EVENTS0[0] || syncstate_1_q)"
+        },
+        {
+          "state": "S1",
+          "signal": "$display",
+          "value": "\"Received %d\", _e_req_0",
+          "description": "$display(\"Received %d\", thread_0_wire$0) where wire$0 = _e_req_0"
+        }
+      ],
+      "reset_behavior": {
+        "_init_0": "1'b1",
+        "_thread_0_event_counter_2_1_q": "1'b0",
+        "_thread_0_event_syncstate_1_q": "1'b0"
+      },
+      "notes": [
+        "No state registers — output-only module driven by event scheduling",
+        "Sync state pattern at EVENTS0[1]: waits on _e_req_valid, holds via syncstate_1",
+        "_e_req_ack asserted while in sync wait state (ready to receive)"
+      ]
+    },
+    {
+      "module_name": "top",
+      "description": "Handshake requester — sends request with r_q as data, waits for ack, updates r_q, loops",
+      "interface": {
+        "inputs": [
+          {"name": "_e_req_ack", "width": 1, "description": "Request handshake acknowledge from responder"}
+        ],
+        "outputs": [
+          {"name": "_e_req_valid", "width": 1, "description": "Request handshake valid"},
+          {"name": "_e_req_0", "width": 1, "description": "Request data (current value of r_q)"}
+        ],
+        "clock": "clk_i",
+        "reset": "rst_ni"
+      },
+      "registers": [
+        {
+          "name": "r_q",
+          "width": 1,
+          "reset_value": "1'b0",
+          "description": "Data register — sent as request payload"
+        }
+      ],
+      "states": [
+        {
+          "name": "S0",
+          "description": "Initialize — set r_q = 0",
+          "entry": "_init_0 one-shot (first cycle) OR feedback from S4",
+          "events": ["EVENTS0[0]"]
+        },
+        {
+          "name": "S1",
+          "description": "Delay after init",
+          "entry": "1 cycle after S0",
+          "events": ["EVENTS0[1]"]
+        },
+        {
+          "name": "S2",
+          "description": "Wait for ack (sync wait on _e_req_ack)",
+          "entry": "EVENTS0[1] fires, enters sync wait",
+          "events": ["EVENTS0[1]", "EVENTS0[2]"]
+        },
+        {
+          "name": "S3",
+          "description": "Ack received — set r_q = 1",
+          "entry": "Same cycle _e_req_ack goes high",
+          "events": ["EVENTS0[3]"]
+        },
+        {
+          "name": "S4",
+          "description": "Loop delay",
+          "entry": "1 cycle after S3",
+          "events": ["EVENTS0[4]"]
+        }
+      ],
+      "transitions": [
+        {
+          "from": "S0",
+          "to": "S1",
+          "condition": "unconditional",
+          "timing": "1-cycle delay"
+        },
+        {
+          "from": "S1",
+          "to": "S2",
+          "condition": "_e_req_ack = 0",
+          "timing": "hold via sync state (same cycle enters wait)"
+        },
+        {
+          "from": "S1",
+          "to": "S3",
+          "condition": "_e_req_ack = 1",
+          "timing": "combinational (same cycle if ack already high)"
+        },
+        {
+          "from": "S2",
+          "to": "S2",
+          "condition": "_e_req_ack = 0",
+          "timing": "hold via sync state"
+        },
+        {
+          "from": "S2",
+          "to": "S3",
+          "condition": "_e_req_ack = 1",
+          "timing": "combinational (same cycle)"
+        },
+        {
+          "from": "S3",
+          "to": "S4",
+          "condition": "unconditional",
+          "timing": "1-cycle delay"
+        },
+        {
+          "from": "S4",
+          "to": "S0",
+          "condition": "unconditional",
+          "timing": "combinational feedback"
+        }
+      ],
+      "outputs": [
+        {
+          "state": "S0",
+          "signal": "r_q",
+          "value": "1'b0",
+          "description": "r_q <= thread_0_wire$0 = 1'b0 (reset data for new cycle)"
+        },
+        {
+          "state": "S1",
+          "signal": "_e_req_valid",
+          "value": "1",
+          "description": "Asserted from S1 through sync wait until ack (EVENTS0[1] || syncstate_2_q)"
+        },
+        {
+          "state": "S1",
+          "signal": "_e_req_0",
+          "value": "r_q",
+          "description": "Current r_q value as request data (thread_0_wire$1 = r_q)"
+        },
+        {
+          "state": "S3",
+          "signal": "r_q",
+          "value": "1'b1",
+          "description": "r_q <= thread_0_wire$2 = 1'b1 (mark received)"
+        }
+      ],
+      "reset_behavior": {
+        "_init_0": "1'b1",
+        "r_q": "1'b0",
+        "_thread_0_event_counter_4_1_q": "1'b0",
+        "_thread_0_event_counter_3_1_q": "1'b0",
+        "_thread_0_event_syncstate_2_q": "1'b0",
+        "_thread_0_event_counter_1_1_q": "1'b0"
+      },
+      "notes": [
+        "5 events with sync wait at EVENTS0[2] on _e_req_ack",
+        "EVENTS0[0] sets r_q=0 (init), EVENTS0[1] enters wait with _e_req_valid asserted",
+        "After ack received, EVENTS0[3] sets r_q=1, then delay and feedback to start over",
+        "Infinite loop: set r_q=0 -> request with data=0 -> wait for ack -> set r_q=1 -> delay -> repeat"
+      ]
+    }
+  ],
+  "notes": [
+    "Code 9 contains two independent modules that form a requester/responder pair",
+    "Module 'top' is the requester, module 'reggg' is the responder",
+    "They would be connected externally via _e_req_valid, _e_req_ack, _e_req_0 signals",
+    "Unlike Code 10, there is no instantiation within the file — modules are separate"
+  ]
+}

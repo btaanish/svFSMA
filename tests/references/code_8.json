@@ -1,0 +1,76 @@
+{
+  "code_number": 8,
+  "module_name": "top",
+  "description": "Conditional branch — true path sets r_q=1, false path ($display) is dead code. Loops every 2 cycles.",
+  "interface": {
+    "inputs": [],
+    "outputs": [],
+    "clock": "clk_i",
+    "reset": "rst_ni"
+  },
+  "registers": [
+    {
+      "name": "r_q",
+      "width": 1,
+      "reset_value": "1'b0",
+      "description": "General-purpose state register"
+    }
+  ],
+  "states": [
+    {
+      "name": "S0",
+      "description": "Branch on thread_0_wire$0 (always true) and set r_q = 1",
+      "entry": "_init_0 one-shot (first cycle) OR feedback from S2",
+      "events": ["EVENTS0[0]", "EVENTS0[1]"]
+    },
+    {
+      "name": "S1",
+      "description": "Delay after true branch — merge point",
+      "entry": "1 cycle after S0 (via counter_2_1)",
+      "events": ["EVENTS0[2]", "EVENTS0[5]"]
+    },
+    {
+      "name": "S2",
+      "description": "Feedback delay — not a distinct state, EVENTS0[5] merges combinationally into S0 on next cycle",
+      "entry": "EVENTS0[5] fires combinationally with EVENTS0[2]",
+      "events": ["EVENTS0[5]"]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "S0",
+      "to": "S1",
+      "condition": "unconditional (true branch always taken)",
+      "timing": "1-cycle delay"
+    },
+    {
+      "from": "S1",
+      "to": "S0",
+      "condition": "unconditional",
+      "timing": "combinational feedback (EVENTS0[5] -> EVENTS0[0] via feedback loop)"
+    }
+  ],
+  "outputs": [
+    {
+      "state": "S0",
+      "signal": "r_q",
+      "value": "1'b1",
+      "description": "r_q <= thread_0_wire$1 = 1'b1 (true branch action at EVENTS0[1])"
+    }
+  ],
+  "reset_behavior": {
+    "_init_0": "1'b1",
+    "r_q": "1'b0",
+    "_thread_0_event_counter_4_1_q": "1'b0",
+    "_thread_0_event_counter_2_1_q": "1'b0"
+  },
+  "notes": [
+    "6 events with a branch at EVENTS0[0]",
+    "EVENTS0[1] = EVENTS0[0] && thread_0_wire$0 (true branch, wire$0 = 1'b1, always taken)",
+    "EVENTS0[3] = EVENTS0[0] && !thread_0_wire$0 (false branch, always false — dead code)",
+    "True path: EVENTS0[0] -> EVENTS0[1] (r_q<=1) -> counter_2 -> EVENTS0[2] -> merge EVENTS0[5] -> feedback",
+    "False path: EVENTS0[0] -> EVENTS0[3] -> counter_4 -> EVENTS0[4] ($display) -> merge EVENTS0[5] — entirely dead",
+    "$display at EVENTS0[4] is dead code since EVENTS0[3] never fires",
+    "Effectively a 2-state loop that sets r_q=1 every cycle"
+  ]
+}

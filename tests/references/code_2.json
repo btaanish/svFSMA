@@ -1,0 +1,120 @@
+{
+  "code_number": 2,
+  "module_name": "top",
+  "description": "Handshake requester with conditional branch — infinite request loop toggling r_q",
+  "interface": {
+    "inputs": [
+      {"name": "_e_req_ack", "width": 1, "description": "Handshake acknowledge from responder"}
+    ],
+    "outputs": [
+      {"name": "_e_req_valid", "width": 1, "description": "Handshake request valid (asserted while waiting for ack)"},
+      {"name": "_e_req_0", "width": 1, "description": "Request data (current value of r_q)"}
+    ],
+    "clock": "clk_i",
+    "reset": "rst_ni"
+  },
+  "registers": [
+    {
+      "name": "r_q",
+      "width": 1,
+      "reset_value": "1'b0",
+      "description": "Request data register"
+    }
+  ],
+  "states": [
+    {
+      "name": "S0",
+      "description": "Request — wait for ack",
+      "entry": "_init_0 one-shot (first cycle) OR feedback from S3",
+      "events": ["EVENTS0[0]"]
+    },
+    {
+      "name": "S1",
+      "description": "Ack received — set r_q",
+      "entry": "Same cycle that _e_req_ack is sampled high",
+      "events": ["EVENTS0[1]", "EVENTS0[3]"]
+    },
+    {
+      "name": "S2",
+      "description": "Clear r_q",
+      "entry": "1 cycle after S1",
+      "events": ["EVENTS0[4]", "EVENTS0[5]"]
+    },
+    {
+      "name": "S3",
+      "description": "Loop delay",
+      "entry": "1 cycle after S2",
+      "events": ["EVENTS0[6]"]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "S0",
+      "to": "S0",
+      "condition": "_e_req_ack = 0",
+      "timing": "hold via sync state"
+    },
+    {
+      "from": "S0",
+      "to": "S1",
+      "condition": "_e_req_ack = 1",
+      "timing": "combinational (same cycle)"
+    },
+    {
+      "from": "S1",
+      "to": "S2",
+      "condition": "unconditional",
+      "timing": "1-cycle delay"
+    },
+    {
+      "from": "S2",
+      "to": "S3",
+      "condition": "unconditional",
+      "timing": "1-cycle delay"
+    },
+    {
+      "from": "S3",
+      "to": "S0",
+      "condition": "unconditional",
+      "timing": "combinational feedback"
+    }
+  ],
+  "outputs": [
+    {
+      "state": "S0",
+      "signal": "_e_req_valid",
+      "value": "1",
+      "description": "Asserted while waiting for ack"
+    },
+    {
+      "state": "S0",
+      "signal": "_e_req_0",
+      "value": "r_q",
+      "description": "Current register value as request data"
+    },
+    {
+      "state": "S1",
+      "signal": "r_q",
+      "value": "1'b1",
+      "description": "r_q <= thread_0_wire$2 = 1 (true branch)"
+    },
+    {
+      "state": "S2",
+      "signal": "r_q",
+      "value": "1'b0",
+      "description": "r_q <= thread_0_wire$3 = 0"
+    }
+  ],
+  "reset_behavior": {
+    "_init_0": "1'b1",
+    "r_q": "1'b0",
+    "_thread_0_event_counter_6_1_q": "1'b0",
+    "_thread_0_event_counter_4_1_q": "1'b0",
+    "_thread_0_event_syncstate_1_q": "1'b0"
+  },
+  "notes": [
+    "EVENTS0[2] (false branch: r_q <= 1) is dead code — thread_0_wire$1 = 1'b1 so !thread_0_wire$1 is always false",
+    "The FSM implements an infinite request loop, toggling r_q between 1 and 0 each iteration",
+    "_e_req_0 outputs the current r_q value as request payload"
+  ]
+}

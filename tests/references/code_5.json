@@ -1,0 +1,72 @@
+{
+  "code_number": 5,
+  "module_name": "Top",
+  "description": "Multi-cycle counter with $finish — runs once (3 cycles) then terminates simulation",
+  "interface": {
+    "inputs": [],
+    "outputs": [],
+    "clock": "clk_i",
+    "reset": "rst_ni"
+  },
+  "registers": [],
+  "states": [
+    {
+      "name": "S0",
+      "description": "Init / Start Counter",
+      "entry": "_init_0 one-shot (first cycle) OR feedback from S2",
+      "events": ["EVENTS0[0]"]
+    },
+    {
+      "name": "S1",
+      "description": "Counter Reached — Branch",
+      "entry": "counter_1_q == 2'd2 (2 cycles after S0)",
+      "events": ["EVENTS0[1]"]
+    },
+    {
+      "name": "S2",
+      "description": "Finish",
+      "entry": "1 cycle after S1",
+      "events": ["EVENTS0[3]"]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "S0",
+      "to": "S1",
+      "condition": "counter_1_q == 2'd2",
+      "timing": "2-cycle delay (multi-cycle counter)"
+    },
+    {
+      "from": "S1",
+      "to": "S2",
+      "condition": "unconditional",
+      "timing": "1-cycle delay via counter_3"
+    },
+    {
+      "from": "S2",
+      "to": "S0",
+      "condition": "unconditional",
+      "timing": "combinational feedback (but $finish halts simulation)"
+    }
+  ],
+  "outputs": [
+    {
+      "state": "S2",
+      "signal": "$finish",
+      "value": null,
+      "description": "Terminate simulation"
+    }
+  ],
+  "reset_behavior": {
+    "_init_0": "1'b1",
+    "_thread_0_event_counter_3_1_q": "1'b0",
+    "_thread_0_event_counter_1_q": "2'b00"
+  },
+  "notes": [
+    "No state registers (r_q) — self-contained test module",
+    "EVENTS0[2] ($display branch) is dead code: thread_0_wire$1 = 1'b1 makes !thread_0_wire$1 always false",
+    "Multi-cycle counter at index 1 uses 2-bit register with comparison (== 2'd2), provides 2-cycle delay",
+    "FSM runs exactly once (3 cycles) then terminates via $finish",
+    "Despite feedback loop, $finish prevents second iteration"
+  ]
+}

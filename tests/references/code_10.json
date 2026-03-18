@@ -1,0 +1,216 @@
+{
+  "code_number": 10,
+  "modules": [
+    {
+      "module_name": "Sub",
+      "description": "Responder with branching and output selector — waits for request, branches on _e_req_valid, sends response via handshake",
+      "interface": {
+        "inputs": [
+          {"name": "_e_req_valid", "width": 1, "description": "Request handshake valid"},
+          {"name": "_e_req_0", "width": 1, "description": "Request data"},
+          {"name": "_e_resp_ack", "width": 1, "description": "Response handshake ack from consumer"}
+        ],
+        "outputs": [
+          {"name": "_e_req_ack", "width": 1, "description": "Request ack (pulses when request accepted)"},
+          {"name": "_e_resp_valid", "width": 1, "description": "Response valid (asserted while waiting for resp ack)"},
+          {"name": "_e_resp_0", "width": 1, "description": "Response data (muxed by selector: 0 or 1)"}
+        ],
+        "clock": "clk_i",
+        "reset": "rst_ni"
+      },
+      "registers": [
+        {
+          "name": "_e_resp_valid_selector_q",
+          "width": 1,
+          "reset_value": "1'b0",
+          "description": "Tracks which branch drives response output"
+        }
+      ],
+      "selector": {
+        "output": "_e_resp_0",
+        "selector_signal": "_e_resp_valid_selector_n",
+        "values": {
+          "0": "thread_0_wire$4 = 1'b0 (false branch data)",
+          "1": "thread_0_wire$3 = 1'b1 (true branch data)"
+        }
+      },
+      "states": [
+        {
+          "name": "S0",
+          "description": "Wait for Request — branch on _e_req_valid",
+          "entry": "_init_0 one-shot OR feedback from S2/S_skip",
+          "events": ["EVENTS0[0]"]
+        },
+        {
+          "name": "S_skip",
+          "description": "No-Request Idle — 1-cycle delay when no request",
+          "entry": "Same cycle as S0 when _e_req_valid = 0",
+          "events": ["EVENTS0[1]", "EVENTS0[2]"]
+        },
+        {
+          "name": "S1",
+          "description": "Response Delay (True Branch) — request accepted",
+          "entry": "Same cycle as request accepted (EVENTS0[3] and EVENTS0[7] fire combinationally)",
+          "events": ["EVENTS0[3]", "EVENTS0[7]"]
+        },
+        {
+          "name": "S2",
+          "description": "Wait for Response Ack (True Branch)",
+          "entry": "EVENTS0[8] fires, enters sync wait on _e_resp_ack",
+          "events": ["EVENTS0[8]", "EVENTS0[9]"]
+        }
+      ],
+      "transitions": [
+        {
+          "from": "S0",
+          "to": "S1",
+          "condition": "_e_req_valid = 1",
+          "timing": "combinational (same cycle, _e_req_ack pulses)"
+        },
+        {
+          "from": "S0",
+          "to": "S_skip",
+          "condition": "_e_req_valid = 0",
+          "timing": "combinational (same cycle)"
+        },
+        {
+          "from": "S_skip",
+          "to": "S0",
+          "condition": "unconditional",
+          "timing": "1-cycle delay via counter_2, then combinational feedback through merge"
+        },
+        {
+          "from": "S1",
+          "to": "S2",
+          "condition": "unconditional",
+          "timing": "1-cycle delay via counter_8"
+        },
+        {
+          "from": "S2",
+          "to": "S2",
+          "condition": "_e_resp_ack = 0",
+          "timing": "hold via syncstate_9"
+        },
+        {
+          "from": "S2",
+          "to": "S0",
+          "condition": "_e_resp_ack = 1",
+          "timing": "via merge EVENTS0[10] -> combinational feedback"
+        }
+      ],
+      "outputs": [
+        {
+          "state": "S1",
+          "signal": "_e_req_ack",
+          "value": "1",
+          "description": "Ack pulses for one cycle when request is accepted (EVENTS0[3])"
+        },
+        {
+          "state": "S2",
+          "signal": "_e_resp_valid",
+          "value": "1",
+          "description": "Asserted while waiting for response ack"
+        },
+        {
+          "state": "S2",
+          "signal": "_e_resp_0",
+          "value": "1'b1",
+          "description": "selector=1 (true branch), data = thread_0_wire$3 = 1'b1"
+        }
+      ],
+      "reset_behavior": {
+        "_init_0": "1'b1",
+        "_thread_0_event_counter_2_1_q": "1'b0",
+        "_thread_0_event_counter_5_1_q": "1'b0",
+        "_thread_0_event_counter_8_1_q": "1'b0",
+        "_thread_0_event_syncstate_6_q": "1'b0",
+        "_thread_0_event_syncstate_9_q": "1'b0",
+        "_e_resp_valid_selector_q": "1'b0"
+      },
+      "notes": [
+        "EVENTS0[4] (false branch of second split) is dead code: thread_0_wire$2 = 1'b1",
+        "EVENTS0[5] and EVENTS0[6] are also dead (downstream of EVENTS0[4])",
+        "3-way merge at EVENTS0[10] joins true-branch response, dead false-branch, and no-request idle",
+        "Selector pattern determines _e_resp_0 — only selector=1 (true branch, data=1) is reachable"
+      ]
+    },
+    {
+      "module_name": "Top",
+      "description": "Instantiates Sub module and runs a simple 2-state loop ending with $finish",
+      "interface": {
+        "inputs": [],
+        "outputs": [],
+        "clock": "clk_i",
+        "reset": "rst_ni"
+      },
+      "registers": [],
+      "submodule_instantiation": {
+        "instance_name": "_spawn_0",
+        "module_type": "Sub",
+        "port_mapping": {
+          "Sub._e_req_valid": "Top._le_req_valid",
+          "Sub._e_req_ack": "Top._le_req_ack",
+          "Sub._e_req_0": "Top._le_req_0",
+          "Sub._e_resp_valid": "Top._le_resp_valid",
+          "Sub._e_resp_ack": "Top._le_resp_ack",
+          "Sub._e_resp_0": "Top._le_resp_0"
+        },
+        "channels": {
+          "request": "Top drives _le_req_valid, _le_req_0 -> Sub; Sub drives _le_req_ack -> Top",
+          "response": "Sub drives _le_resp_valid, _le_resp_0 -> Top; Top drives _le_resp_ack -> Sub"
+        },
+        "note": "Top's EVENTS0 chain does NOT drive any _le_* signals"
+      },
+      "states": [
+        {
+          "name": "S0",
+          "description": "Init",
+          "entry": "_init_0 one-shot OR feedback from S1",
+          "events": ["EVENTS0[0]"]
+        },
+        {
+          "name": "S1",
+          "description": "Finish",
+          "entry": "1 cycle after S0",
+          "events": ["EVENTS0[1]"]
+        }
+      ],
+      "transitions": [
+        {
+          "from": "S0",
+          "to": "S1",
+          "condition": "unconditional",
+          "timing": "1-cycle delay"
+        },
+        {
+          "from": "S1",
+          "to": "S0",
+          "condition": "unconditional",
+          "timing": "combinational feedback (but $finish halts simulation)"
+        }
+      ],
+      "outputs": [
+        {
+          "state": "S1",
+          "signal": "$finish",
+          "value": null,
+          "description": "Terminate simulation"
+        }
+      ],
+      "reset_behavior": {
+        "_init_0": "1'b1",
+        "_thread_0_event_counter_1_1_q": "1'b0"
+      },
+      "notes": [
+        "Simple 2-event loop identical to Code 1 structure but with $finish instead of register update",
+        "Sub module runs independently via its own _init_0",
+        "The _le_* wires are declared but not driven by Top's event chain"
+      ]
+    }
+  ],
+  "notes": [
+    "Multi-module design: Sub is instantiated inside Top",
+    "Sub handles request/response handshaking with branching and selector pattern",
+    "Top simply runs a 2-state loop ending in $finish after 1 cycle"
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "code_number": 7,
+  "module_name": "concurrent",
+  "description": "3-state loop: set r_q=1, set r_q=0, display r_q — repeating every 3 cycles",
+  "interface": {
+    "inputs": [],
+    "outputs": [],
+    "clock": "clk_i",
+    "reset": "rst_ni"
+  },
+  "registers": [
+    {
+      "name": "r_q",
+      "width": 1,
+      "reset_value": "1'b0",
+      "description": "General-purpose state register"
+    }
+  ],
+  "states": [
+    {
+      "name": "S0",
+      "description": "Set r_q = 1",
+      "entry": "_init_0 one-shot (first cycle) OR feedback from S2",
+      "events": ["EVENTS0[0]"]
+    },
+    {
+      "name": "S1",
+      "description": "Set r_q = 0",
+      "entry": "1 cycle after S0",
+      "events": ["EVENTS0[1]"]
+    },
+    {
+      "name": "S2",
+      "description": "Display r_q value",
+      "entry": "1 cycle after S1",
+      "events": ["EVENTS0[2]"]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "S0",
+      "to": "S1",
+      "condition": "unconditional",
+      "timing": "1-cycle delay"
+    },
+    {
+      "from": "S1",
+      "to": "S2",
+      "condition": "unconditional",
+      "timing": "1-cycle delay"
+    },
+    {
+      "from": "S2",
+      "to": "S0",
+      "condition": "unconditional",
+      "timing": "combinational feedback"
+    }
+  ],
+  "outputs": [
+    {
+      "state": "S0",
+      "signal": "r_q",
+      "value": "1'b1",
+      "description": "r_q <= thread_0_wire$0 = 1'b1"
+    },
+    {
+      "state": "S1",
+      "signal": "r_q",
+      "value": "1'b0",
+      "description": "r_q <= thread_0_wire$1 = 1'b0"
+    },
+    {
+      "state": "S2",
+      "signal": "$display",
+      "value": "\"Value = %d\", r_q",
+      "description": "$display(\"Value = %d\", thread_0_wire$2) where wire$2 = r_q"
+    }
+  ],
+  "reset_behavior": {
+    "_init_0": "1'b1",
+    "r_q": "1'b0",
+    "_thread_0_event_counter_2_1_q": "1'b0",
+    "_thread_0_event_counter_1_1_q": "1'b0"
+  },
+  "notes": [
+    "3 events forming a continuous loop with 2 counter delays and combinational feedback",
+    "EVENTS0[0] sets r_q=1, EVENTS0[1] (1 cycle later) sets r_q=0, EVENTS0[2] (1 cycle later) displays r_q",
+    "At display time (S2), r_q holds the value set in S1 (0), so $display shows 0",
+    "The loop repeats indefinitely every 2 clock cycles (S0 and S2 fire in same cycle due to feedback)"
+  ]
+}

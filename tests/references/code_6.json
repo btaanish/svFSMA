@@ -1,0 +1,60 @@
+{
+  "code_number": 6,
+  "module_name": "Top",
+  "description": "Simple 1-cycle delay loop with $finish — runs once then terminates simulation",
+  "interface": {
+    "inputs": [],
+    "outputs": [],
+    "clock": "clk_i",
+    "reset": "rst_ni"
+  },
+  "registers": [],
+  "states": [
+    {
+      "name": "S0",
+      "description": "Init / Start",
+      "entry": "_init_0 one-shot (first cycle) OR feedback from S1",
+      "events": ["EVENTS0[0]"]
+    },
+    {
+      "name": "S1",
+      "description": "Finish",
+      "entry": "1 cycle after S0",
+      "events": ["EVENTS0[2]"]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "S0",
+      "to": "S1",
+      "condition": "unconditional",
+      "timing": "1-cycle delay"
+    },
+    {
+      "from": "S1",
+      "to": "S0",
+      "condition": "unconditional",
+      "timing": "combinational feedback (but $finish halts simulation)"
+    }
+  ],
+  "outputs": [
+    {
+      "state": "S1",
+      "signal": "$finish",
+      "value": null,
+      "description": "Terminate simulation"
+    }
+  ],
+  "reset_behavior": {
+    "_init_0": "1'b1",
+    "_thread_0_event_counter_2_1_q": "1'b0"
+  },
+  "notes": [
+    "No state registers — self-contained test module",
+    "EVENTS0[1] ($display branch) is dead code: thread_0_wire$1 = 1'b1 makes !thread_0_wire$1 always false",
+    "3 events but only 2 are live: EVENTS0[0] (init/feedback) and EVENTS0[2] (counter delay)",
+    "EVENTS0[2].event_current = counter_2_1_q, driven by EVENTS0[0] — 1-cycle delay",
+    "FSM runs once (1 cycle) then terminates via $finish",
+    "Simpler version of Code 5 — no multi-cycle counter, just immediate delay then finish"
+  ]
+}
