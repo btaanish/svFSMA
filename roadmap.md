@@ -35,13 +35,13 @@ Create an agent spec (prompt/description) that enables an AI agent to read Syste
 - Actual cycles: ~4 (writing + 2 verification rounds + fix rounds)
 - Notes: 5 new patterns added (multi-cycle counter, system tasks, multi-module, selector/mux, truncated input). 2 new worked examples (Code 5, Code 10). Apollo verified all 9 codes covered, all patterns correct, all examples pass. Three timing errors in Example 4 caught and fixed.
 
-### M3: Build Test Harness and Final Validation (cycles: 6)
-- Create a test script that uses the agent_spec.md as a system prompt, feeds each of the 9 SV codes to an LLM, and evaluates the FSM extraction output
-- For each code: verify correct state identification, transition logic, output values, and timing
-- Use LLM-as-judge evaluation: a second LLM pass compares the agent's FSM output against a known-correct reference FSM
-- Create reference FSM outputs for all 9 codes (derived from verified worked examples + independent analysis)
-- Final iteration on agent_spec.md if any codes fail
-- Status: **PENDING**
+### M3: Run Test Harness, Fix Failures, and Final Validation (cycles: 6)
+- Test infrastructure already built: `tests/test_agent_spec.py` (LLM-as-judge) and `tests/references/` (9 reference JSONs)
+- Run the test harness against all 9 SV codes
+- Fix test infrastructure issues (model selection, API auth, parsing edge cases)
+- Iterate on `agent_spec.md` if any codes produce incorrect FSM extractions
+- Re-run until all 9 codes pass
+- Status: **IN PROGRESS** (starting cycle 1)
 
 ## Lessons Learned
 - M1 scope was too narrow (only 2 codes). Human expects ALL codes to work.
