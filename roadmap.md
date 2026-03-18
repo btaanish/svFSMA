@@ -31,12 +31,16 @@ Create an agent spec (prompt/description) that enables an AI agent to read Syste
   - Update agent_spec.md with new patterns and guidance
   - Add worked examples for representative new patterns
   - Validate spec produces correct FSM output for ALL 9 codes
-- Status: **PENDING**
+- Status: **COMPLETE**
+- Actual cycles: ~4 (writing + 2 verification rounds + fix rounds)
+- Notes: 5 new patterns added (multi-cycle counter, system tasks, multi-module, selector/mux, truncated input). 2 new worked examples (Code 5, Code 10). Apollo verified all 9 codes covered, all patterns correct, all examples pass. Three timing errors in Example 4 caught and fixed.
 
-### M3: Build Test Harness and Final Validation (cycles: 5)
-- Create testing framework that feeds all SV codes to an agent using the spec
-- Evaluate correctness of FSM extraction for each code
-- Final iteration and polish
+### M3: Build Test Harness and Final Validation (cycles: 6)
+- Create a test script that uses the agent_spec.md as a system prompt, feeds each of the 9 SV codes to an LLM, and evaluates the FSM extraction output
+- For each code: verify correct state identification, transition logic, output values, and timing
+- Use LLM-as-judge evaluation: a second LLM pass compares the agent's FSM output against a known-correct reference FSM
+- Create reference FSM outputs for all 9 codes (derived from verified worked examples + independent analysis)
+- Final iteration on agent_spec.md if any codes fail
 - Status: **PENDING**
 
 ## Lessons Learned
@@ -44,3 +48,5 @@ Create an agent spec (prompt/description) that enables an AI agent to read Syste
 - Always read the full spec.md before scoping milestones.
 - Verification (Vera) caught real errors — independent verification is valuable.
 - Cycle estimates were slightly optimistic for M1 (estimated 5, used ~3 for writing + ~2 for verification).
+- M2 verification caught timing errors that were subtle but real — always verify worked examples against the actual code.
+- Multi-round verification (Vera → Apollo → Ares fix → Apollo re-verify) was necessary for correctness.
