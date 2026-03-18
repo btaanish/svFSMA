@@ -41,7 +41,9 @@ Create an agent spec (prompt/description) that enables an AI agent to read Syste
 - Fix test infrastructure issues (model selection, API auth, parsing edge cases)
 - Iterate on `agent_spec.md` if any codes produce incorrect FSM extractions
 - Re-run until all 9 codes pass
-- Status: **IN PROGRESS** (starting cycle 1)
+- Status: **IN PROGRESS** (cycle 1 — Athena verified infra works, Code 1 passes; handing to Ares)
+- Athena sanity check: anthropic SDK installed, API key available, Code 1 PASS confirmed
+- Remaining: run full suite, fix any failures, iterate on agent_spec.md if needed
 
 ## Lessons Learned
 - M1 scope was too narrow (only 2 codes). Human expects ALL codes to work.
