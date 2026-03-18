@@ -1238,7 +1238,7 @@ Simple 2-event loop with feedback. Same structure as Worked Example 1.
   - If `_e_req_valid = 1` → EVENTS0[3] fires (same cycle). `_e_req_ack` asserted. Transition to S1.
   - If `_e_req_valid = 0` → EVENTS0[1] fires (same cycle). Transition to S_skip.
 - **S_skip: No-Request Delay** — EVENTS0[2] fires (1 cycle after EVENTS0[1] via counter). EVENTS0[10] (merge) fires same cycle. Feeds back to S0. This path provides a 1-cycle idle loop when no request is pending.
-- **S1: Process Request — True Branch Delay** — 1 cycle after EVENTS0[7] fires (same cycle as EVENTS0[3], since `thread_0_wire$2=1`). EVENTS0[8] fires via counter.
+- **S1: Process Request — True Branch Delay** — same cycle as EVENTS0[3]/EVENTS0[7] fires (combinational, since `thread_0_wire$2=1`). EVENTS0[8] fires via counter.
 - **S2: Wait for Response Ack (True Branch)** — EVENTS0[8] active, sync wait on `_e_resp_ack`. `_e_resp_valid` asserted, selector=1, `_e_resp_0 = 1'b1`. When `_e_resp_ack` received → EVENTS0[9] fires → EVENTS0[10] (merge) → feedback to S0.
 
 **Note:** Dead states from the false branch (EVENTS0[4] → EVENTS0[5] → EVENTS0[6]) are omitted since `thread_0_wire$2 = 1'b1` makes that path unreachable.
@@ -1282,7 +1282,7 @@ S0: Wait for Request
   Actions: (none)
   Outputs: _e_req_ack = 0, _e_resp_valid = 0
   Transitions:
-    -> S1 [when _e_req_valid = 1; _e_req_ack pulses this cycle; S1 entered 1 cycle later via counter_8]
+    -> S1 [when _e_req_valid = 1; _e_req_ack pulses this cycle; S1 entered same cycle (EVENTS0[3] and EVENTS0[7] fire combinationally)]
     -> S_skip [when _e_req_valid = 0, same cycle]
 
 S_skip: No-Request Idle
@@ -1292,7 +1292,7 @@ S_skip: No-Request Idle
     -> S0 [after 1-cycle delay via counter_2, combinational feedback through merge]
 
 S1: Response Delay (True Branch)
-  Entry: 1 cycle after request accepted (EVENTS0[7] -> counter_8)
+  Entry: same cycle as request accepted (EVENTS0[3] and EVENTS0[7] fire combinationally)
   Actions: (none)
   Outputs: _e_resp_valid = 0
   Transitions:
