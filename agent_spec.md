@@ -74,6 +74,7 @@ assign EVENTS0[0].event_current = _init_0 || EVENTS0[K].event_current;
 - **Meaning:** This is the loop entry point. It fires on the init one-shot (first cycle after reset) OR when the last event in the chain fires (feedback loop for repetition).
 - `K` is the index of the last event in the chain.
 - If there is no `|| EVENTS0[K]` term, the chain runs once and stops.
+- **CRITICAL: `_init_0` going to 0 does NOT break the loop.** Once the first cycle passes and `_init_0 <= 0`, EVENTS0[0] is kept alive by the `|| EVENTS0[K]` feedback term. Every time EVENTS0[K] fires, it drives EVENTS0[0] combinationally in the SAME cycle, restarting the chain. The FSM runs **perpetually** — do NOT conclude it is one-shot unless `|| EVENTS0[K]` is absent.
 
 #### Pattern B: Event Counter (1-Cycle Delay)
 ```systemverilog
@@ -124,7 +125,9 @@ Create a directed graph where:
 
 ### 2.4 Identify the Feedback Loop
 
-If `EVENTS0[0]` includes `|| EVENTS0[K]`, the chain loops: after the last event fires, the FSM returns to the beginning. This means the FSM runs continuously after reset. If there is no feedback, the FSM executes once and halts.
+If `EVENTS0[0]` includes `|| EVENTS0[K]`, the chain loops: after the last event fires, the FSM returns to the beginning. This means the FSM runs **continuously and perpetually** after reset. If there is no feedback, the FSM executes once and halts.
+
+**WARNING:** Do NOT mistake the one-shot `_init_0` for the primary driver after reset. `_init_0` only fires on cycle 0. From cycle 1 onward, the feedback `EVENTS0[K]` drives EVENTS0[0] combinationally each time the loop completes. A module with Pattern A (containing `|| EVENTS0[K]`) is a perpetual loop — it never halts.
 
 **Output for Phase 2:** The event graph showing all events, their patterns (A-F), predecessor(s), condition (if any), and type of transition.
 
@@ -168,6 +171,9 @@ Each event counter or sync state that introduces a clock-cycle boundary defines 
 3. Each sync state defines a **wait state** (it may persist across multiple cycles).
 4. Branches and merges are transitions within or between states, not states themselves.
 5. Pattern A feedback is combinational: when EVENTS0[K] fires and feeds back to EVENTS0[0] via the OR in Pattern A, both EVENTS0[K] and EVENTS0[0] fire in the same clock cycle. The feedback target state (S0) is the dominant state for output computation in that cycle.
+6. **CRITICAL: An action event (sync-driven) and a subsequent counter delay event are ALWAYS separate states.** If EVENTS0[i] fires when a condition is met (sync wait resolves) and performs an action (e.g., `r_q <= 1`), and EVENTS0[i+1] is a counter register (`_q`) that fires 1 cycle after EVENTS0[i], then EVENTS0[i] is state Si and EVENTS0[i+1] is a SEPARATE state S(i+1) — even if S(i+1) has NO actions. Do NOT merge them. The counter delay creates a mandatory clock-cycle boundary, making S(i+1) a distinct "Loop delay" state.
+
+**Example of rule 6:** For a 3-event chain `EVENTS0[0](init/feedback) → EVENTS0[1](sync+action) → EVENTS0[2](counter delay) → feedback to EVENTS0[0]`, there are exactly 3 states: S0 (wait for condition), S1 (action — same cycle as condition met), S2 (loop delay — 1 cycle after S1, no action). S1 and S2 must never be merged into one state.
 
 ### 4.2 Define State Transitions
 
@@ -731,6 +737,182 @@ If a module is missing its header (e.g., the file starts mid-code with `ys_ff @(
 2. Infer ports from usage — signals that appear in `assign` outputs or `input`/`output` keywords found later in the code.
 3. Continue analysis from the available code, starting from whatever declarations or `always_ff` blocks are present.
 4. Note in the Phase 5 output that the module header was missing/truncated.
+
+---
+
+## Worked Example 2b: Simple Handshake Requester — 3-Event Loop (Code 4)
+
+This example demonstrates the **3-event loop with sync wait, action, and counter delay**. The key lesson: even when the counter-delay state (EVENTS0[2]) has NO register actions, it is ALWAYS a separate FSM state (S2), never merged with the action state (S1).
+
+### Input Code
+
+```systemverilog
+// (module header truncated — starts mid-code)
+ys_ff @(posedge clk_i or negedge rst_ni) begin : _proc_transition
+    if (~rst_ni) begin
+    end
+  end
+  localparam logic[0:0] thread_0_wire$0 = 1'b0;
+  localparam logic[0:0] thread_0_wire$1 = 1'b1;
+  for (genvar i = 0; i < 3; i ++) begin : EVENTS0
+    logic event_current;
+    end
+  logic _init_0;
+  logic _thread_0_event_counter_2_1_q, _thread_0_event_counter_2_1_n;
+  logic _thread_0_event_syncstate_1_q, _thread_0_event_syncstate_1_n;
+  assign EVENTS0[2].event_current = _thread_0_event_counter_2_1_q;
+  assign _thread_0_event_counter_2_1_n = EVENTS0[1].event_current;
+  assign EVENTS0[1].event_current = (EVENTS0[0].event_current || _thread_0_event_syncstate_1_q) && _e_req_ack;
+    assign _thread_0_event_syncstate_1_n = (EVENTS0[0].event_current || _thread_0_event_syncstate_1_q) && !_e_req_ack;
+  assign EVENTS0[0].event_current = _init_0 || EVENTS0[2].event_current;
+  assign _e_req_valid = (EVENTS0[0].event_current || _thread_0_event_syncstate_1_q);
+  assign _e_req_0 = thread_0_wire$0;
+  always_ff @(posedge clk_i or negedge rst_ni) begin : _thread_0_st_transition
+    if (~rst_ni) begin
+      _init_0 <= 1'b1;
+      r_q <= '0;
+      _thread_0_event_counter_2_1_q <= '0;
+      _thread_0_event_syncstate_1_q <= '0;
+    end else begin
+      if (EVENTS0[1].event_current) begin
+        r_q[0 +: 1] <= thread_0_wire$1;
+      end
+      _init_0 <= 1'b0;
+      _thread_0_event_counter_2_1_q <= _thread_0_event_counter_2_1_n;
+      _thread_0_event_syncstate_1_q <= _thread_0_event_syncstate_1_n;
+    end
+  end
+endmodule
+```
+
+### Phase 1 Analysis
+
+Module header truncated — module name inferred as `unknown`. Ports inferred from usage.
+
+| Port | Direction | Width | Classification |
+|---|---|---|---|
+| `clk_i` | input | 1 | Clock |
+| `rst_ni` | input | 1 | Reset (active-low) |
+| `_e_req_ack` | input | 1 | Data Input (handshake acknowledge) |
+| `_e_req_valid` | output | 1 | Data Output (handshake request valid) |
+| `_e_req_0` | output | 1 | Data Output (request data, constant 0) |
+
+| Signal | Classification |
+|---|---|
+| `r_q` | State register (1-bit) |
+| `thread_0_wire$0` | Datapath wire (localparam = `1'b0`) |
+| `thread_0_wire$1` | Datapath wire (localparam = `1'b1`) |
+| `_init_0` | Init one-shot |
+| `_thread_0_event_counter_2_1_q/_n` | Event counter at index 2 (1-cycle delay) |
+| `_thread_0_event_syncstate_1_q/_n` | Sync state at index 1 |
+
+### Phase 2 Analysis
+
+**EVENTS0 has 3 elements (indices 0..2).**
+
+| Event | Assign Statement | Pattern | Predecessor | Condition |
+|---|---|---|---|---|
+| `EVENTS0[0]` | `= _init_0 \|\| EVENTS0[2].event_current` | **A: Init/Feedback** | _init_0, EVENTS0[2] | — |
+| `EVENTS0[1]` | `= (EVENTS0[0] \|\| syncstate_1_q) && _e_req_ack` | **C: Sync Wait** | EVENTS0[0] or syncstate | `_e_req_ack = 1` |
+| `syncstate_1_n` | `= (EVENTS0[0] \|\| syncstate_1_q) && !_e_req_ack` | **C: Sync Hold** | — | `_e_req_ack = 0` |
+| `EVENTS0[2]` | `= _thread_0_event_counter_2_1_q` | **B: Counter (1-cycle delay)** | EVENTS0[1] | — |
+
+**Event graph:**
+```
+_init_0 ──┐
+           ├──> EVENTS0[0] --[sync wait on _e_req_ack=1]--> EVENTS0[1] --[counter delay]--> EVENTS0[2] --[feedback]--> EVENTS0[0]
+EVENTS0[2]─┘         |
+                      └--[sync hold: _e_req_ack=0]--> syncstate_1_q --[loop back to EVENTS0[0] check]
+```
+
+### Phase 3 Analysis
+
+**Datapath:** `thread_0_wire$1 = 1'b1` (constant value written to `r_q` on EVENTS0[1]).
+
+**Scheduling:** 3 events in a loop: init/feedback → sync wait on ack → action → 1-cycle counter delay → feedback.
+
+**Sequential:** On `EVENTS0[1]`, `r_q <= 1'b1`. Counter and syncstate advance each cycle.
+
+### Phase 4 Analysis
+
+**States — applying the rules:**
+- **S0** — `EVENTS0[0]` fires. This is the "request" state: asserts `_e_req_valid`. Waits for `_e_req_ack` via the sync mechanism. If `_e_req_ack=0`, holds in S0 (syncstate keeps the wait active). If `_e_req_ack=1`, fires EVENTS0[1] → transitions to S1 in the SAME cycle.
+- **S1** — `EVENTS0[1]` fires (sync-driven). This is the "ack received" action state: sets `r_q <= 1`. Fires in the same cycle that `_e_req_ack` is sampled high. **Counter_2_1_n is loaded with EVENTS0[1]=1**, so counter_2_1_q will be 1 on the NEXT clock edge → S2.
+- **S2** — `EVENTS0[2]` fires (`_thread_0_event_counter_2_1_q = 1`), **exactly 1 cycle after S1**. This is the "loop delay" state: NO register actions. It fires combinationally into EVENTS0[0] → S0 in the same cycle.
+
+**IMPORTANT:** S1 and S2 are SEPARATE states. S1 is action (r_q<=1), S2 is delay (no action). They cannot be merged because EVENTS0[2] is driven by a `_q` register, creating a mandatory 1-cycle clock boundary after S1.
+
+**Transitions:**
+- S0 → S0: `_e_req_ack = 0` (hold via syncstate)
+- S0 → S1: `_e_req_ack = 1` (same cycle, combinational)
+- S1 → S2: unconditional, 1-cycle delay (counter register)
+- S2 → S0: unconditional, combinational feedback (Pattern A)
+
+**Outputs:**
+- `_e_req_valid = EVENTS0[0] || syncstate_1_q` — asserted in S0 (both the init/feedback pulse and the syncstate hold)
+- `_e_req_0 = 1'b0` — constant 0 request data
+- `r_q <= 1'b1` — set in S1 on EVENTS0[1]
+
+### Phase 5 Output
+
+```
+=== FSM Description: unknown ===
+
+--- Interface ---
+Inputs:  _e_req_ack [1] - Handshake acknowledge from responder
+Outputs: _e_req_valid [1] - Handshake request valid
+         _e_req_0 [1] - Request data (constant 0)
+Clock:   clk_i (posedge)
+Reset:   rst_ni (active-low, asynchronous)
+
+--- Registers ---
+r_q [1] - reset value: 0 - state register (set to 1 on each ack)
+
+--- States ---
+S0: Request — wait for ack
+  Entry: _init_0 one-shot (first cycle) OR feedback from S2
+  Actions: (none — outputs _e_req_valid=1 combinationally)
+  Transitions:
+    -> S0 [_e_req_ack = 0, hold via syncstate]
+    -> S1 [_e_req_ack = 1, same cycle as ack received]
+
+S1: Ack received — set r_q=1
+  Entry: Same cycle that _e_req_ack is sampled high
+  Actions: r_q <= 1'b1
+  Transitions:
+    -> S2 [unconditional, 1-cycle delay via counter]
+
+S2: Loop delay
+  Entry: 1 cycle after S1 (counter register fires)
+  Actions: (none)
+  Transitions:
+    -> S0 [unconditional, combinational feedback via Pattern A]
+
+--- Outputs ---
+S0: _e_req_valid = 1 (asserted while waiting for ack: EVENTS0[0] || syncstate_1_q)
+    _e_req_0 = 1'b0 (constant request data)
+S1: r_q <= 1'b1
+
+--- Reset Behavior ---
+On reset (rst_ni = 0):
+  _init_0                       <= 1'b1
+  r_q                           <= 1'b0
+  _thread_0_event_counter_2_1_q <= 1'b0
+  _thread_0_event_syncstate_1_q <= 1'b0
+  FSM begins in S0 via _init_0 one-shot.
+
+--- Timing ---
+Cycle 0: _init_0=1 → EVENTS0[0]=1 → _e_req_valid=1. If _e_req_ack=0: syncstate_n=1, stay in S0.
+Cycle N (when _e_req_ack=1): EVENTS0[1]=1 → r_q<=1, counter_n=1. S1 fires.
+Cycle N+1: counter_q=1 → EVENTS0[2]=1 → EVENTS0[0]=1. S2 fires, feeds back to S0 same cycle.
+Cycle N+2+: back in S0, _e_req_valid asserted, waiting for next ack.
+
+--- Notes ---
+- Module header truncated — module name is 'unknown', ports inferred from usage.
+- Simple 3-event loop: S0 (wait) → S1 (action, same cycle as ack) → S2 (delay, 1 cycle later) → S0.
+- S2 has no register actions — it exists solely as the 1-cycle pipeline delay before looping back.
+- Similar structure to Code 2 but without the conditional branch on r_q.
+```
 
 ---
 
