@@ -171,9 +171,10 @@ Each event counter or sync state that introduces a clock-cycle boundary defines 
 3. Each sync state defines a **wait state** (it may persist across multiple cycles).
 4. Branches and merges are transitions within or between states, not states themselves.
 5. Pattern A feedback is combinational: when EVENTS0[K] fires and feeds back to EVENTS0[0] via the OR in Pattern A, both EVENTS0[K] and EVENTS0[0] fire in the same clock cycle. The feedback target state (S0) is the dominant state for output computation in that cycle.
-6. **CRITICAL: An action event (sync-driven) and a subsequent counter delay event are ALWAYS separate states.** If EVENTS0[i] fires when a condition is met (sync wait resolves) and performs an action (e.g., `r_q <= 1`), and EVENTS0[i+1] is a counter register (`_q`) that fires 1 cycle after EVENTS0[i], then EVENTS0[i] is state Si and EVENTS0[i+1] is a SEPARATE state S(i+1) — even if S(i+1) has NO actions. Do NOT merge them. The counter delay creates a mandatory clock-cycle boundary, making S(i+1) a distinct "Loop delay" state.
-
-**Example of rule 6:** For a 3-event chain `EVENTS0[0](init/feedback) → EVENTS0[1](sync+action) → EVENTS0[2](counter delay) → feedback to EVENTS0[0]`, there are exactly 3 states: S0 (wait for condition), S1 (action — same cycle as condition met), S2 (loop delay — 1 cycle after S1, no action). S1 and S2 must never be merged into one state.
+6. **CRITICAL — sync event + counter delay = separate states:** If EVENTS0[i] is a **Pattern C sync event** (fires when a sync wait resolves, with or without actions) and EVENTS0[i+1] is a **Pattern B counter** that fires 1 cycle after EVENTS0[i], then EVENTS0[i] is state Si and EVENTS0[i+1] is a SEPARATE state S(i+1) — even if S(i+1) has NO actions. Do NOT merge them. The counter delay creates a mandatory clock-cycle boundary.
+   - **This rule applies ONLY to Pattern C sync events** — events whose `assign` statement contains `syncstate_q`.
+   - **Do NOT apply this rule to Pattern D branch events** (false/true branch events without syncstate). A branch event with no actions followed by a counter may be grouped as a single "skip" or "delay" state.
+   - **Example:** For a 3-event chain `EVENTS0[0](init/feedback) → EVENTS0[1](Pattern C sync+action) → EVENTS0[2](counter delay) → feedback to EVENTS0[0]`, there are exactly 3 states: S0 (wait for condition), S1 (action — same cycle as condition met), S2 (loop delay — 1 cycle after S1, no action). S1 and S2 must never be merged into one state.
 
 ### 4.2 Define State Transitions
 
@@ -667,6 +668,7 @@ assign _thread_0_event_counter_X_n = EVENTS0[P].event_current ? 2'd1
   4. Otherwise → hold at 0 (idle)
 - **FSM interpretation:** This is a **multi-cycle delay**. The FSM waits N cycles between the predecessor event and event X. The delay is `target - initial + 1` clock cycles (e.g., `2'd2 - 2'd1 + 1 = 2` cycles).
 - **Key difference from Pattern B:** Standard Pattern B uses a 1-bit register providing exactly 1-cycle delay. This variant uses a wider counter with comparison, providing configurable multi-cycle delays.
+- **CRITICAL: Do NOT create intermediate states for the counting cycles.** The entire multi-cycle wait is a SINGLE state transition from the predecessor state to event X's state. The intermediate "counting" cycles are internal to the counter and do NOT correspond to separate FSM states. Only the event that FIRES (when counter reaches target) creates a new state — not the cycles while counting.
 
 ### System Task Actions ($finish and $display)
 
